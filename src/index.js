@@ -1,62 +1,56 @@
 export default {
-  async fetch(request, env) {
-    if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+  async email(message, env, ctx) {
+    const from = message.from;
+    const to = message.to;
 
-    const RESEND_API_KEY = env.RESEND_API_KEY;
-    const CONFIG_URL = env.CONFIG_URL;
-    const DEFAULT_EMAIL = env.DEFAULT_EMAIL;
-    const KV_CONFIG = env.KV_CONFIG;
-    const KV_LOG = env.KV_LOG;
+    // 获取原始邮件内容（raw）
+    const rawEmail = await message.raw;
 
-    let originalEmail;
-    try { originalEmail = await request.json(); } 
-    catch (e) { return new Response('Invalid JSON', { status: 400 }); }
+    // KV 映射：先查具体地址
+    let targetEmail = await env.KV_CONFIG.get(to);
 
-    let config = await KV_CONFIG.get('mail_routes', 'json');
-    if (!config) {
-      const res = await fetch(CONFIG_URL);
-      config = await res.json();
-      await KV_CONFIG.put('mail_routes', JSON.stringify(config));
+    if (!targetEmail) {
+      // 再查域名 catch-all 映射
+      const domain = to.split("@")[1];
+      targetEmail = await env.KV_CONFIG.get("@" + domain);
     }
 
-    const domain = originalEmail.to.split('@')[1].toLowerCase();
-    let status = 'ignored';
-    let target = null;
+    if (!targetEmail) {
+      // 如果是路由域名但没映射 → fallback 默认邮箱
+      const domainList = env.ROUTE_DOMAINS.split(",").map(d => d.trim());
+      const toDomain = to.split("@")[1];
+      if (domainList.includes(toDomain)) {
+        targetEmail = env.DEFAULT_EMAIL;
+      }
+    }
 
-    if (config.routes[domain]) {
-      target = config.routes[domain];
-      status = (await forwardEmail(target, originalEmail, RESEND_API_KEY)) ? 'forwarded' : 'failed';
+    if (!targetEmail) {
+      // 不属于任何映射或路由域 → 记录日志，不转发
+      const logKey = `log:${Date.now()}:${to}`;
+      await env.KV_LOG.put(logKey, rawEmail);
+      return;
+    }
+
+    // 使用 Resend API 转发
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${env.RESEND_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        from,
+        to: targetEmail,
+        subject: message.headers.get("Subject") || "(no subject)",
+        html: `<pre>${rawEmail}</pre>`,   // 或者根据你想保留的格式改
+        text: rawEmail
+      })
+    });
+
+    if (!resp.ok) {
+      console.error("Resend 转发失败:", await resp.text());
     } else {
-      target = DEFAULT_EMAIL;
-      status = (await forwardEmail(target, originalEmail, RESEND_API_KEY)) ? 'default' : 'failed';
+      console.log("邮件转发成功到", targetEmail);
     }
-
-    await logEmail(KV_LOG, originalEmail, status);
-    return new Response(JSON.stringify({ status, target }), { status: 200 });
   }
-}
-
-async function forwardEmail(to, originalEmail, apiKey) {
-  const payload = {
-    from: originalEmail.from,
-    to,
-    subject: originalEmail.subject,
-    html: originalEmail.html,
-    text: originalEmail.text
-  };
-  const resp = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(payload)
-  });
-  return resp.ok;
-}
-
-async function logEmail(KV_LOG, email, status) {
-  const timestamp = Date.now();
-  const key = `log:${timestamp}:${email.id || crypto.randomUUID()}`;
-  await KV_LOG.put(key, JSON.stringify({ ...email, status, timestamp }));
-}
+};
