@@ -1,20 +1,11 @@
 name = "mail-forwarder"
 main = "src/index.js"
-compatibility_date = "2025-11-16"
-type = "javascript"
+compatibility_date = "2025-11-16"  # 更新为当前日期
 
-[[kv_namespaces]]
-binding = "KV_CONFIG"
-id = "填写你的 KV_CONFIG ID"
-
-[[kv_namespaces]]
-binding = "KV_LOG"
-id = "填写你的 KV_LOG ID"
-
-[[triggers.crons]]
-schedule = "0 0 * * *"
-path = "/cron"
+# KV 绑定稍后在 Dashboard 添加
+# [[kv_namespaces]]
+# ...
 
 [vars]
-CONFIG_URL = "https://raw.githubusercontent.com/<你的GitHub用户名>/<仓库名>/main/config.json"
-DEFAULT_EMAIL = "default@example.com"
+CONFIG_URL = "https://raw.githubusercontent.com/你的用户名/mail-forwarder/main/config.json"
+DEFAULT_EMAIL = "mail@mydomin.com"
